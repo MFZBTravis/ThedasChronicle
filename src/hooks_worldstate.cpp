@@ -8,11 +8,14 @@
 
 #include <windows.h>
 #include <intrin.h>
+#include <MinHook.h>
 
 #include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <cstring>
 
 namespace {
 
@@ -33,7 +36,7 @@ namespace {
 //   +0x38  char*    value string, parsed as a number
 
 constexpr uint32_t kMsgCharGenDataResponse = 0xE89C81C4;
-constexpr uint32_t kMsgGameStarted = 0xBD4B8796;       // sent when play begins: a new game confirmed, or a save loaded
+constexpr uint32_t kMsgSessionChanged = 0xBD4B8796;    // the game switching state: play starting (new game or save) or quitting to the menu
 
 // The world state is only imported during character creation. Loading a save also asks the Keep for the world state,
 // and importing then would overwrite the save's progress. Character creation is recognised by the game resetting the
@@ -136,19 +139,154 @@ uintptr_t __fastcall hk_BosParse(void* type, void* out, int status, const char* 
 ApplyDefaults_t o_ApplyDefaults = nullptr;
 std::atomic<bool> g_inCharacterCreation{false};
 
+// ---- Watch: after an import, check now and then that the game still holds the imported values ----
+//
+// WorldStateManager +0x08 -> config; config +0x20 -> Group*[] (count at [-4]); group +0x28 -> Flag*[];
+// flag +0x10 PlotFlagId (type in the low nibble of byte +0x1E: 1 = bool), +0x20 char* name.
+// GetPlotSystem() returns the plot system; its vtable +0x00 is GetBool(id), +0x08 is GetInt(id).
+// All of this runs on the game thread, from the WorldStateManager's message handler.
+
+const game::Target kGetPlotSystem = {"GetPlotSystem", 0x404EC83, {}};
+using GetPlotSystem_t = void*(__fastcall*)();
+using GetBool_t = bool(__fastcall*)(void* plot, const void* id);
+using GetInt_t = int(__fastcall*)(void* plot, const void* id);
+
+constexpr ULONGLONG kFirstCheckMs = 60 * 1000;        // after play starts (level loading briefly blanks the values)
+constexpr ULONGLONG kCheckEveryMs = 10 * 60 * 1000;
+
+struct Watch {
+    void* manager = nullptr;
+    std::unordered_map<std::string, std::string> expected;
+    bool playing = false;    // the imported game has started
+    ULONGLONG nextCheck = 0;
+};
+Watch g_watch;
+DWORD g_gameThread = 0;                  // the thread the WorldStateManager handles messages on
+GetBool_t o_GetBool = nullptr;           // the plot system's GetBool, hooked as a steady tick during play
+thread_local bool t_checking = false;
+
+void CheckImport();
+
+// The game reads plot flags constantly while playing, so GetBool doubles as a clock for the periodic check.
+bool __fastcall hk_GetBool(void* plot, const void* id)
+{
+    if (!t_checking && g_watch.playing && GetCurrentThreadId() == g_gameThread && GetTickCount64() >= g_watch.nextCheck) {
+        g_watch.nextCheck = GetTickCount64() + kCheckEveryMs;
+        t_checking = true;
+        CheckImport();
+        t_checking = false;
+    }
+    return o_GetBool(plot, id);
+}
+
+void HookPlotTick()
+{
+    if (o_GetBool)
+        return;
+    __try {
+        void* plot = reinterpret_cast<GetPlotSystem_t>(game::Address(kGetPlotSystem))();
+        if (!plot)
+            return;
+        void* fn = (*static_cast<void***>(plot))[0];
+        MH_STATUS st = MH_CreateHook(fn, reinterpret_cast<LPVOID>(&hk_GetBool), reinterpret_cast<LPVOID*>(&o_GetBool));
+        if (st == MH_OK)
+            st = MH_EnableHook(fn);
+        if (st != MH_OK)
+            o_GetBool = nullptr;
+        LOG("WorldState: periodic check hooked to the plot system: %s", MH_StatusToString(st));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        o_GetBool = nullptr;
+    }
+}
+
+const BYTE* FindFlag(void* manager, const char* name)
+{
+    void* config = At<void*>(manager, 0x08);
+    auto** groups = At<void**>(config, 0x20);
+    uint32_t ng = groups ? reinterpret_cast<uint32_t*>(groups)[-1] : 0;
+    for (uint32_t g = 0; g < ng; ++g) {
+        auto** flags = At<void**>(groups[g], 0x28);
+        uint32_t nf = flags ? reinterpret_cast<uint32_t*>(flags)[-1] : 0;
+        for (uint32_t i = 0; i < nf; ++i) {
+            const char* n = At<const char*>(flags[i], 0x20);
+            if (n && strcmp(n, name) == 0)
+                return static_cast<const BYTE*>(flags[i]);
+        }
+    }
+    return nullptr;
+}
+
+void CheckImportUnsafe()
+{
+    void* plot = reinterpret_cast<GetPlotSystem_t>(game::Address(kGetPlotSystem))();
+    if (!plot)
+        return;
+    void** vtbl = *static_cast<void***>(plot);
+    int ok = 0;
+    std::string differ;
+    for (const auto& [name, want] : g_watch.expected) {
+        const BYTE* flag = FindFlag(g_watch.manager, name.c_str());
+        if (!flag)
+            continue;  // not one of the flags this game keeps
+        const void* id = flag + 0x10;
+        int value = (flag[0x1E] & 0xF) == 1 ? (reinterpret_cast<GetBool_t>(vtbl[0])(plot, id) ? 1 : 0)
+                                            : reinterpret_cast<GetInt_t>(vtbl[1])(plot, id);
+        if (std::to_string(value) == want) {
+            ++ok;
+        } else {
+            differ += " " + name + "=" + std::to_string(value) + " (imported " + want + ")";
+        }
+    }
+    if (differ.empty())
+        LOG("WorldState: check: all %d imported flags still as imported", ok);
+    else
+        LOG("WorldState: check: %d flags as imported, these differ:%s", ok, differ.c_str());
+}
+
+void CheckImport()
+{
+    __try {
+        CheckImportUnsafe();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG("WorldState: check skipped (the game's world state wasn't readable)");
+    }
+}
+
+void StopWatching(const char* why)
+{
+    if (!g_watch.manager)
+        return;
+    g_watch = {};
+    LOG("WorldState: stopped checking the imported world state (%s)", why);
+}
+
 uintptr_t __fastcall hk_ApplyDefaults(void* self)
 {
     auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) - base == kCharacterCreationOpensRva && !g_inCharacterCreation.exchange(true))
-        LOG("WorldState: character creation opened; world-state.json will be offered");
+    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) - base == kCharacterCreationOpensRva) {
+        StopWatching("character creation opened");
+        if (!g_inCharacterCreation.exchange(true))
+            LOG("WorldState: character creation opened; world-state.json will be offered");
+    }
     return o_ApplyDefaults(self);
 }
 
 uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
 {
+    g_gameThread = GetCurrentThreadId();
     const uint32_t type = At<uint32_t>(msg, 0x0C);
-    if (type == kMsgGameStarted && g_inCharacterCreation.exchange(false))
-        LOG("WorldState: play started; imports off until character creation opens again");
+    if (type == kMsgSessionChanged) {
+        if (g_inCharacterCreation.exchange(false))
+            LOG("WorldState: character creation finished; imports off until it opens again");
+        if (g_watch.manager && g_watch.playing) {
+            CheckImport();
+            StopWatching("left the game: quit to the menu or loaded a save");
+        } else if (g_watch.manager) {
+            g_watch.playing = true;
+            g_watch.nextCheck = GetTickCount64() + kFirstCheckMs;
+            HookPlotTick();
+        }
+    }
     if (type != kMsgCharGenDataResponse)
         return o_OnMessage(self, msg);
 
@@ -205,6 +343,10 @@ uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
     LOG("WorldState: imported \"%s\" (dated %s): %zu flags from the file, %zu left at the game's default",
         inj.file.name.c_str(), inj.file.updated.c_str(), inj.found, inj.missing);
 
+    // Re-imports during the same character creation replace the values to watch.
+    g_watch = {};
+    g_watch.manager = self;
+    g_watch.expected = inj.file.values;
     return rc;
 }
 

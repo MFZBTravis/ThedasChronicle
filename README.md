@@ -11,7 +11,10 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
 
 - **World state import.** When you start a new game and choose to import from the Keep, the game gets your
   `world-state.json` instead, then shows its usual "custom world state" and "import successful" screens. It works for every
-  new game you start, including after quitting to the main menu.
+  new game you start, including after quitting to the main menu. Imports only happen in character creation: loading a
+  save never changes it.
+- **Checks.** During a game started from an import, the plugin checks now and then (a minute in, then every 10 minutes,
+  and when you leave the game) that the imported values are still in place, and writes the result to its log.
 - **Golden nug.** Using the golden nug unlocks everything it can sync (schematics, mounts, music and the rest), since there's
   no Keep account to read past unlocks from.
 - **No waiting on EA.** The plugin stops the game contacting EA's Keep and telemetry servers, so those requests fail at
@@ -34,6 +37,10 @@ Everything else in the game is untouched.
 3. Make your world state on the Thedas Chronicle website and press **Export JSON**. Put the downloaded
    `world-state.json` in the game folder, next to `DragonAgeInquisition.exe`.
 4. Start a new game. At character creation, choose to import a world state from the Keep.
+
+The game signs in to the Keep about 30 seconds after the main menu appears. If you start a new game sooner,
+character creation may import your world state without asking first. After you choose to import, it takes about
+15 seconds.
 
 The game folder for the Steam version is usually
 `C:\Program Files (x86)\Steam\steamapps\common\Dragon Age Inquisition`.
@@ -85,7 +92,7 @@ against the expected build, and only then hooks them with MinHook.
 
 | File | Purpose |
 |---|---|
-| `src/hooks_worldstate.cpp` | Fakes a successful Keep login, answers the world-state request with the file, and turns failed uploads into a harmless "retry later". |
+| `src/hooks_worldstate.cpp` | Fakes a successful Keep login, answers the world-state request with the file during character creation, turns other failed replies into a harmless "retry later", and checks the imported values during play. |
 | `src/hooks_vault.cpp` | Notes whether the game last asked to read or upload a world state, so replies are handled correctly. |
 | `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked". |
 | `src/hooks_offline.cpp` | Makes lookups of EA's Keep and telemetry servers fail immediately. |
