@@ -7,7 +7,9 @@
 #include "worldstate_file.h"
 
 #include <windows.h>
+#include <intrin.h>
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -31,6 +33,15 @@ namespace {
 //   +0x38  char*    value string, parsed as a number
 
 constexpr uint32_t kMsgCharGenDataResponse = 0xE89C81C4;
+constexpr uint32_t kMsgGameStarted = 0xBD4B8796;       // sent when play begins: a new game confirmed, or a save loaded
+
+// The world state is only imported during character creation. Loading a save also asks the Keep for the world state,
+// and importing then would overwrite the save's progress. Character creation is recognised by the game resetting the
+// world state to defaults from this call site as the screen opens; play starting ends it.
+const game::Target kApplyDefaults = {
+    "WorldStateManager::ApplyDefaults", 0x33961E4,
+    {0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24}};
+constexpr ULONG_PTR kCharacterCreationOpensRva = 0x33751BE;  // return address of that ApplyDefaults call
 
 const game::Target kOnMessage = {
     "WorldStateManager::OnMessage", 0x33A2BFB,
@@ -56,6 +67,7 @@ struct StrRef {
 };
 
 using OnMessage_t = uintptr_t(__fastcall*)(void* self, void* msg);
+using ApplyDefaults_t = uintptr_t(__fastcall*)(void* self);
 using MapFind_t = void**(__fastcall*)(void* map, void** outNode, const StrRef* key);
 
 using BosParse_t = uintptr_t(__fastcall*)(void* type, void* out, int status, const char* error, uintptr_t a5,
@@ -121,9 +133,23 @@ uintptr_t __fastcall hk_BosParse(void* type, void* out, int status, const char* 
     return 1;
 }
 
+ApplyDefaults_t o_ApplyDefaults = nullptr;
+std::atomic<bool> g_inCharacterCreation{false};
+
+uintptr_t __fastcall hk_ApplyDefaults(void* self)
+{
+    auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) - base == kCharacterCreationOpensRva && !g_inCharacterCreation.exchange(true))
+        LOG("WorldState: character creation opened; world-state.json will be offered");
+    return o_ApplyDefaults(self);
+}
+
 uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
 {
-    if (At<uint32_t>(msg, 0x0C) != kMsgCharGenDataResponse)
+    const uint32_t type = At<uint32_t>(msg, 0x0C);
+    if (type == kMsgGameStarted && g_inCharacterCreation.exchange(false))
+        LOG("WorldState: play started; imports off until character creation opens again");
+    if (type != kMsgCharGenDataResponse)
         return o_OnMessage(self, msg);
 
     const int32_t result = At<int32_t>(msg, 0x28);
@@ -132,11 +158,12 @@ uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
     //  - an upload (the game sends the world state back to the Keep after an import and when a save loads):
     //    left alone the game may reset the world state to defaults, so report it as "retry later", which
     //    changes nothing;
-    //  - a read (the player chose to import): answered with world-state.json.
+    //  - a read (the player chose to import): answered with world-state.json, but only during character creation.
+    //    Anything else (e.g. the request made when a save loads) is also reported as "retry later".
     const bool failed = result != 0 || At<BYTE>(msg, 0x2C) != 0;
     if (!failed)
         return o_OnMessage(self, msg);
-    if (hooks::vault::LastWasUpload()) {
+    if (hooks::vault::LastWasUpload() || !g_inCharacterCreation) {
         At<int32_t>(msg, 0x28) = 1;
         uintptr_t rc = o_OnMessage(self, msg);
         At<int32_t>(msg, 0x28) = result;
@@ -194,6 +221,7 @@ bool Install()
     LOG("Installing world state hooks:");
     bool ok = game::Hook(kMapFind, reinterpret_cast<LPVOID>(&hk_MapFind), reinterpret_cast<LPVOID*>(&o_MapFind));
     ok &= game::Hook(kBosParse, reinterpret_cast<LPVOID>(&hk_BosParse), reinterpret_cast<LPVOID*>(&o_BosParse));
+    ok &= game::Hook(kApplyDefaults, reinterpret_cast<LPVOID>(&hk_ApplyDefaults), reinterpret_cast<LPVOID*>(&o_ApplyDefaults));
     // The message hook goes last: it relies on the others being in place.
     ok &= hooks::vault::Install();
     ok = ok && game::Hook(kOnMessage, reinterpret_cast<LPVOID>(&hk_OnMessage), reinterpret_cast<LPVOID*>(&o_OnMessage));
