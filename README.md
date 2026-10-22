@@ -38,10 +38,6 @@ Everything else in the game is untouched.
    `world-state.json` in the game folder, next to `DragonAgeInquisition.exe`.
 4. Start a new game. At character creation, choose to import a world state from the Keep.
 
-The game signs in to the Keep about 30 seconds after the main menu appears. If you start a new game sooner,
-character creation may import your world state without asking first. After you choose to import, it takes about
-15 seconds.
-
 The game folder for the Steam version is usually
 `C:\Program Files (x86)\Steam\steamapps\common\Dragon Age Inquisition`.
 
