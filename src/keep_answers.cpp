@@ -5,12 +5,15 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstdlib>
 #include <optional>
 
 namespace keep {
 
 namespace {
+
+std::atomic<bool> g_served{false};
 
 // The world-state reply as the game's parser reads it: "flags" is an object of flag name -> integer (required),
 // "name" and "lastUpdate" are strings, "history" an array of {"name", "hash"}.
@@ -40,9 +43,10 @@ Reply Answer(const std::string& method, const std::string& path, const std::stri
     if (route == "/auth") {
         r.body = R"({"sessionId":"thedas-chronicle-offline"})";
     } else if (route.find("/wv/") != std::string::npos && method == "GET") {
-        if (std::optional<std::string> ws = FileWorldState())
+        if (std::optional<std::string> ws = FileWorldState()) {
             r.body = std::move(*ws);
-        else
+            g_served = true;
+        } else
             r = {404, R"({"error":"not found"})"};
     } else if (route.find("/wv/") != std::string::npos) {
         r.body = WorldStateJson("DAI", "", nlohmann::json::object());
@@ -51,6 +55,11 @@ Reply Answer(const std::string& method, const std::string& path, const std::stri
     }
     LOG("Keep (offline): %s %s -> %d", method.c_str(), route.c_str(), r.status);
     return r;
+}
+
+bool TakeWorldStateServed()
+{
+    return g_served.exchange(false);
 }
 
 } // namespace keep

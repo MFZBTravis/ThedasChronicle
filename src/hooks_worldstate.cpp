@@ -4,6 +4,7 @@
 #include "hooks_nug.h"
 #include "hooks_offline.h"
 #include "hooks_vault.h"
+#include "keep_answers.h"
 #include "log.h"
 #include "worldstate_file.h"
 
@@ -325,11 +326,17 @@ uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
     //    the game would apply the reply to the loaded game, so report it as "retry later", which changes nothing;
     //  - a read (the player chose to import): answered with world-state.json, but only during character creation.
     //    Anything else (e.g. the request made when a save loads) is also reported as "retry later".
+    //  - no request at all: when the player declines the import, the game posts the reply itself without asking
+    //    the Keep. That's left alone, so the game uses its default world state.
     if (hooks::vault::LastWasUpload() || !g_inCharacterCreation) {
         At<int32_t>(msg, 0x28) = 1;
         uintptr_t rc = o_OnMessage(self, msg);
         At<int32_t>(msg, 0x28) = result;
         return rc;
+    }
+    if (!keep::TakeWorldStateServed()) {
+        LOG("WorldState: no world state was requested (import declined); the game's default world state is used");
+        return o_OnMessage(self, msg);
     }
 
     std::optional<worldstate::File> file = worldstate::Load();

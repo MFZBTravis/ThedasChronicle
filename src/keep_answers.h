@@ -16,4 +16,7 @@ struct Reply {
 // Each request is logged by method and path only.
 Reply Answer(const std::string& method, const std::string& path, const std::string& body);
 
+// True once after the world state was served to the game (the player chose to import), then false until the next.
+bool TakeWorldStateServed();
+
 } // namespace keep

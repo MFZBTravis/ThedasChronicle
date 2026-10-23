@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ThedasChronicleHook VERSION 1.0.5 LANGUAGES C CXX)
+project(ThedasChronicleHook VERSION 1.0.6 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Dragon Age: Inquisition is 64-bit; configure with -A x64.")
