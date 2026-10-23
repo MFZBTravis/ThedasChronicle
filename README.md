@@ -15,8 +15,9 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
   save never changes it.
 - **Checks.** During a game started from an import, the plugin checks now and then (a minute in, then every 10 minutes)
   that the imported values are still in place, and writes the result to its log.
-- **Golden nug.** Using the golden nug unlocks everything it can sync (schematics, mounts, music and the rest), since there's
-  no Keep account to read past unlocks from.
+- **Golden nug.** By default, using the golden nug unlocks everything it can sync (schematics, mounts, music and the
+  rest). Set `Mode=earned` in the settings file to make it work like the original Keep instead: it only unlocks what
+  you've synced at the golden nug in your own playthroughs.
 - **An offline Keep.** The game never contacts EA's Keep or telemetry servers. The plugin answers every one of those
   requests itself, instantly (login, world state, golden nug, achievements, telemetry), so nothing waits on EA and
   nothing retries. Multiplayer servers are left alone.
@@ -25,7 +26,7 @@ Everything else in the game is untouched.
 
 ## Requirements
 
-- Dragon Age: Inquisition for PC, tested with the Steam version (game executable build `0x5600F278`). Other builds are
+- Dragon Age: Inquisition for PC: the Steam or EA app version (game executable build `0x5600F278`). Other builds are
   detected and left alone; the log will say so.
 - [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) (x64).
 
@@ -39,11 +40,28 @@ Everything else in the game is untouched.
    `world-state.json` in the game folder, next to `DragonAgeInquisition.exe`.
 4. Start a new game. At character creation, choose to import a world state from the Keep.
 
-The game folder for the Steam version is usually
-`C:\Program Files (x86)\Steam\steamapps\common\Dragon Age Inquisition`.
+The game folder is usually:
+
+- Steam: `C:\Program Files (x86)\Steam\steamapps\common\Dragon Age Inquisition`
+- EA app: `C:\Program Files\EA Games\Dragon Age Inquisition`
 
 To change your world state, replace `world-state.json` and start a new game. To uninstall, delete
 `scripts\ThedasChronicleHook.asi` (and `dinput8.dll` if nothing else uses it).
+
+## Settings
+
+The plugin creates `scripts\ThedasChronicleHook.ini` the first time the game starts. Restart the game after changing it.
+
+```ini
+[GoldenNug]
+Mode=all
+```
+
+- `all` (the default): the golden nug unlocks everything.
+- `earned`: like the original Keep. Each time you use the golden nug, that save's unlocks are added to
+  `scripts\ThedasChronicleNug.json`, and the golden nug in any playthrough unlocks what's in there. It starts empty, and
+  as in the original game the statue only appears after you've finished the main story and used it with a post-game
+  character. Unlocks in the file are never removed; delete the file to start over.
 
 ## The log
 
@@ -91,9 +109,10 @@ against the expected build, and only then hooks them with MinHook.
 |---|---|
 | `src/hooks_worldstate.cpp` | Signs in to the offline Keep, imports the file during character creation, turns other world-state replies into a harmless "retry later", and checks the imported values during play. |
 | `src/hooks_vault.cpp` | Notes whether the game last asked to read or upload a world state, so replies are handled correctly. |
-| `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked". |
+| `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked" (`Mode=all`). |
 | `src/hooks_offline.cpp` | The offline Keep: stands in for the game's secure connections to EA's Keep and telemetry servers and returns the plugin's replies (lookups of those servers are also blocked, as a safety net). |
-| `src/keep_answers.cpp` | Writes the offline Keep's reply to each request. |
+| `src/keep_answers.cpp` | Writes the offline Keep's reply to each request, and keeps the golden nug's synced unlocks (`Mode=earned`). |
+| `src/settings.cpp` | Reads `ThedasChronicleHook.ini`. |
 | `src/worldstate_file.cpp` | Reads `world-state.json`. |
 | `src/game_hook.cpp` | Finds and hooks game functions safely. |
 

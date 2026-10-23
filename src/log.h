@@ -12,9 +12,6 @@ void Shutdown();
 // Also mirrored to OutputDebugString (view with Sysinternals DebugView).
 void Write(const char* fmt, ...);
 
-// Hex + ASCII dump, capped at maxBytes.
-void Hex(const void* data, size_t len, size_t maxBytes = 256);
-
 } // namespace logging
 
 #define LOG(...) ::logging::Write(__VA_ARGS__)

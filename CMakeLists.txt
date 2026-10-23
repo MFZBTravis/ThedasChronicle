@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ThedasChronicleHook VERSION 1.0.6 LANGUAGES C CXX)
+project(ThedasChronicleHook VERSION 1.1.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Dragon Age: Inquisition is 64-bit; configure with -A x64.")
@@ -35,6 +35,7 @@ add_library(ThedasChronicleHook SHARED
     src/hooks_nug.cpp
     src/hooks_offline.cpp
     src/keep_answers.cpp
+    src/settings.cpp
     src/worldstate_file.cpp
 )
 

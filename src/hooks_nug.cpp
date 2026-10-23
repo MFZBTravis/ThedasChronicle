@@ -2,6 +2,7 @@
 
 #include "game_hook.h"
 #include "log.h"
+#include "settings.h"
 
 #include <windows.h>
 
@@ -71,6 +72,9 @@ uintptr_t __fastcall hk_NugOnMessage(void* self, void* msg)
     const int32_t kind = At<int32_t>(msg, 0x30);
     const BYTE error = At<BYTE>(msg, 0x34);
     if (kind != 0 && kind != 1)
+        return o_NugOnMessage(self, msg);
+    // Mode=earned: the offline Keep answers with the unlocks saved from earlier syncs, and the game handles that as is.
+    if (settings::NugEarnedOnly())
         return o_NugOnMessage(self, msg);
 
     // Present the reply as a success. Reads get an empty JSON object as their body; the lookups then

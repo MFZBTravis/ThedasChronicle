@@ -12,7 +12,8 @@ struct Reply {
 //   POST /auth                  a signed-in session
 //   GET  .../wv/...             the world state from world-state.json (404 if there's no file)
 //   PUT/POST .../wv/...         the upload accepted (a minimal world state; the game ignores it, see hooks_worldstate)
-//   anything else               200 with an empty JSON object (golden nug files, telemetry, achievements)
+//   golden nug file             with Mode=earned: uploads kept in ThedasChronicleNug.json, reads answered from it
+//   anything else               200 with an empty JSON object (golden nug with Mode=all, telemetry, achievements)
 // Each request is logged by method and path only.
 Reply Answer(const std::string& method, const std::string& path, const std::string& body);
 

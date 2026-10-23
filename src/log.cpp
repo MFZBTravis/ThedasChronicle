@@ -70,26 +70,4 @@ void Write(const char* fmt, ...)
     }
 }
 
-void Hex(const void* data, size_t len, size_t maxBytes)
-{
-    auto* p = static_cast<const unsigned char*>(data);
-    size_t n = len < maxBytes ? len : maxBytes;
-    for (size_t off = 0; off < n; off += 16) {
-        char hex[16 * 3 + 1] = {};
-        char asc[17] = {};
-        for (size_t i = 0; i < 16; ++i) {
-            if (off + i < n) {
-                snprintf(hex + i * 3, 4, "%02X ", p[off + i]);
-                asc[i] = (p[off + i] >= 0x20 && p[off + i] < 0x7F) ? static_cast<char>(p[off + i]) : '.';
-            } else {
-                memcpy(hex + i * 3, "   ", 3);
-                asc[i] = ' ';
-            }
-        }
-        Write("  %04zX  %s %s", off, hex, asc);
-    }
-    if (len > n)
-        Write("  ... (%zu more bytes)", len - n);
-}
-
 } // namespace logging

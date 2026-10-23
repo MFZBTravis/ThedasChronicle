@@ -1,6 +1,7 @@
 #include "game_hook.h"
 #include "hooks_offline.h"
 #include "log.h"
+#include "settings.h"
 
 #include <windows.h>
 #include <MinHook.h>
@@ -23,6 +24,7 @@ DWORD WINAPI InitThread(LPVOID)
         LOG("MH_Initialize failed: %s", MH_StatusToString(st));
         return 1;
     }
+    settings::Load(g_self);
     hooks::offline::Install();
     game::StartDeferredHooks();
     return 0;
