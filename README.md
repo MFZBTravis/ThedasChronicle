@@ -13,12 +13,13 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
   `world-state.json` instead, then shows its usual "custom world state" and "import successful" screens. It works for every
   new game you start, including after quitting to the main menu. Imports only happen in character creation: loading a
   save never changes it.
-- **Checks.** During a game started from an import, the plugin checks now and then (a minute in, then every 10 minutes,
-  and when you leave the game) that the imported values are still in place, and writes the result to its log.
+- **Checks.** During a game started from an import, the plugin checks now and then (a minute in, then every 10 minutes)
+  that the imported values are still in place, and writes the result to its log.
 - **Golden nug.** Using the golden nug unlocks everything it can sync (schematics, mounts, music and the rest), since there's
   no Keep account to read past unlocks from.
-- **No waiting on EA.** The plugin stops the game contacting EA's Keep and telemetry servers, so those requests fail at
-  once instead of timing out. Multiplayer servers are left alone.
+- **An offline Keep.** The game never contacts EA's Keep or telemetry servers. The plugin answers every one of those
+  requests itself, instantly (login, world state, golden nug, achievements, telemetry), so nothing waits on EA and
+  nothing retries. Multiplayer servers are left alone.
 
 Everything else in the game is untouched.
 
@@ -88,10 +89,11 @@ against the expected build, and only then hooks them with MinHook.
 
 | File | Purpose |
 |---|---|
-| `src/hooks_worldstate.cpp` | Fakes a successful Keep login, answers the world-state request with the file during character creation, turns other failed replies into a harmless "retry later", and checks the imported values during play. |
+| `src/hooks_worldstate.cpp` | Signs in to the offline Keep, imports the file during character creation, turns other world-state replies into a harmless "retry later", and checks the imported values during play. |
 | `src/hooks_vault.cpp` | Notes whether the game last asked to read or upload a world state, so replies are handled correctly. |
 | `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked". |
-| `src/hooks_offline.cpp` | Makes lookups of EA's Keep and telemetry servers fail immediately. |
+| `src/hooks_offline.cpp` | The offline Keep: stands in for the game's secure connections to EA's Keep and telemetry servers and returns the plugin's replies (lookups of those servers are also blocked, as a safety net). |
+| `src/keep_answers.cpp` | Writes the offline Keep's reply to each request. |
 | `src/worldstate_file.cpp` | Reads `world-state.json`. |
 | `src/game_hook.cpp` | Finds and hooks game functions safely. |
 
