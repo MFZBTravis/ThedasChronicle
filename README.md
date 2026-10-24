@@ -21,6 +21,9 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
 - **An offline Keep.** The game never contacts EA's Keep or telemetry servers. The plugin answers every one of those
   requests itself, instantly (login, world state, golden nug, achievements, telemetry), so nothing waits on EA and
   nothing retries. Multiplayer servers are left alone.
+- **EA app offline.** With the EA app in offline mode the game normally never signs in to the Keep, so it doesn't ask
+  about importing a world state and the golden nug says you're not connected. By default the plugin signs the game in
+  to its offline Keep and keeps its Keep requests running, so both work offline too (see Settings).
 
 Everything else in the game is untouched.
 
@@ -55,6 +58,9 @@ The plugin creates `scripts\ThedasChronicleHook.ini` the first time the game sta
 ```ini
 [GoldenNug]
 Mode=all
+
+[Offline]
+Import=ask
 ```
 
 - `all` (the default): the golden nug unlocks everything.
@@ -62,6 +68,15 @@ Mode=all
   `scripts\ThedasChronicleNug.json`, and the golden nug in any playthrough unlocks what's in there. It starts empty, and
   as in the original game the statue only appears after you've finished the main story and used it with a post-game
   character. Unlocks in the file are never removed; delete the file to start over.
+
+`[Offline] Import` decides what happens when the EA app is offline:
+
+- `ask` (the default): the plugin signs the game in to its offline Keep, so the game asks whether to import as usual
+  and the golden nug works.
+- `always`: `world-state.json` is imported without asking. The golden nug doesn't work while offline.
+- `never`: the game's default world state is used. The golden nug doesn't work while offline.
+
+With the EA app online, this setting changes nothing: the game signs in by itself and asks as usual.
 
 ## The log
 
@@ -107,10 +122,10 @@ against the expected build, and only then hooks them with MinHook.
 
 | File | Purpose |
 |---|---|
-| `src/hooks_worldstate.cpp` | Signs in to the offline Keep, imports the file during character creation, turns other world-state replies into a harmless "retry later", and checks the imported values during play. |
+| `src/hooks_worldstate.cpp` | Signs in to the offline Keep (also when the EA app is offline), imports the file during character creation, turns other world-state replies into a harmless "retry later", and checks the imported values during play. |
 | `src/hooks_vault.cpp` | Notes whether the game last asked to read or upload a world state, so replies are handled correctly. |
-| `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked" (`Mode=all`). |
-| `src/hooks_offline.cpp` | The offline Keep: stands in for the game's secure connections to EA's Keep and telemetry servers and returns the plugin's replies (lookups of those servers are also blocked, as a safety net). |
+| `src/hooks_nug.cpp` | Answers the golden nug's sync with "everything unlocked" (`Mode=all`), and lets it run with the EA app offline. |
+| `src/hooks_offline.cpp` | The offline Keep: stands in for the game's secure connections to EA's Keep and telemetry servers and returns the plugin's replies (lookups of those servers are also blocked, as a safety net), and keeps the game's Keep requests running when the EA app is offline. |
 | `src/keep_answers.cpp` | Writes the offline Keep's reply to each request, and keeps the golden nug's synced unlocks (`Mode=earned`). |
 | `src/settings.cpp` | Reads `ThedasChronicleHook.ini`. |
 | `src/worldstate_file.cpp` | Reads `world-state.json`. |

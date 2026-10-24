@@ -1,6 +1,7 @@
 #include "hooks_nug.h"
 
 #include "game_hook.h"
+#include "hooks_worldstate.h"
 #include "log.h"
 #include "settings.h"
 
@@ -33,11 +34,25 @@ const game::Target kJsonGetBool = {
     "Json::GetBool", 0x374CF36,
     {0x48, 0x83, 0xEC, 0x28, 0xE8, 0x87, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC0, 0x74, 0x06, 0x83, 0x78}};
 
+// The manager's sync handler (save loaded: read the account file; golden nug used: sync) first checks the game's
+// online state, GetOnline()->+0xA4 == 2, and otherwise reports "not connected". With the EA app offline that's never
+// 2, so with [Offline] Import=ask, once the plugin has signed the game in to the offline Keep, the state reads as
+// online for the duration of that one handler; everything else (multiplayer included) still sees it as it is.
+const game::Target kNugSync = {
+    "NewGamePlusManager::OnSyncMessage", 0x33B5066,
+    {0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89}};
+const game::Target kGetOnline = {"GetOnline", 0x310B1C2, {}};
+constexpr size_t kOnlineStateOffset = 0xA4;
+constexpr int32_t kOnlineConnected = 2;
+
 using OnMessage_t = uintptr_t(__fastcall*)(void* self, void* msg);
 using JsonGetBool_t = void*(__fastcall*)(void* doc, const char* pointer);
+using GetOnline_t = void*(__fastcall*)();
 
 OnMessage_t o_NugOnMessage = nullptr;
+OnMessage_t o_NugSync = nullptr;
 JsonGetBool_t o_JsonGetBool = nullptr;
+bool g_onlineNoted = false;
 
 template <typename T>
 T& At(void* p, size_t off)
@@ -101,6 +116,25 @@ uintptr_t __fastcall hk_NugOnMessage(void* self, void* msg)
     return rc;
 }
 
+uintptr_t __fastcall hk_NugSync(void* self, void* msg)
+{
+    void* online = nullptr;
+    if (settings::Offline() == settings::OfflineImport::Ask && hooks::worldstate::SignedIn())
+        online = reinterpret_cast<GetOnline_t>(game::Address(kGetOnline))();
+    if (!online || At<int32_t>(online, kOnlineStateOffset) == kOnlineConnected)
+        return o_NugSync(self, msg);
+
+    if (!g_onlineNoted) {
+        g_onlineNoted = true;
+        LOG("Nug: the EA app is offline; letting the golden nug use the offline Keep");
+    }
+    const int32_t state = At<int32_t>(online, kOnlineStateOffset);
+    At<int32_t>(online, kOnlineStateOffset) = kOnlineConnected;
+    uintptr_t rc = o_NugSync(self, msg);
+    At<int32_t>(online, kOnlineStateOffset) = state;
+    return rc;
+}
+
 } // namespace
 
 namespace hooks::nug {
@@ -111,6 +145,7 @@ bool Install()
     g_trueNode[0x40] = 1;
     bool ok = game::Hook(kJsonGetBool, reinterpret_cast<LPVOID>(&hk_JsonGetBool), reinterpret_cast<LPVOID*>(&o_JsonGetBool));
     ok = ok && game::Hook(kNugOnMessage, reinterpret_cast<LPVOID>(&hk_NugOnMessage), reinterpret_cast<LPVOID*>(&o_NugOnMessage));
+    game::Hook(kNugSync, reinterpret_cast<LPVOID>(&hk_NugSync), reinterpret_cast<LPVOID*>(&o_NugSync));
     return ok;
 }
 

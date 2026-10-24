@@ -6,6 +6,7 @@
 #include "hooks_vault.h"
 #include "keep_answers.h"
 #include "log.h"
+#include "settings.h"
 #include "worldstate_file.h"
 
 #include <windows.h>
@@ -123,6 +124,85 @@ void** __fastcall hk_MapFind(void* map, void** outNode, const StrRef* key)
     return outNode;
 }
 
+// The game only signs in to the Keep once the player's EA account is online (the Keep service starts its /auth login
+// on that status message). Without it, the game never asks whether to import a world state.
+std::atomic<bool> g_signedIn{false};
+
+// Keep service message handler: void OnMessage(this = service + 0x20, msg). On the account-status message with state
+// 24 (EA account online) it calls Login(service, msg), which needs the message's EA auth code (char* begin/end at
+// +0x148/+0x150) and account id (char* at +0x170) and sends them in POST /auth. The offline Keep ignores both, so
+// with [Offline] Import=ask the plugin calls Login itself, with placeholders, when the EA account has reported itself
+// offline (state 22) and the game hasn't signed in: once the service's request objects (+0x68, +0x70) are set up,
+// filling in the Keep URL (String at this + 0x08) if it's empty.
+// (Offline, the game doesn't run its Keep requests either; hooks_offline runs them.)
+const game::Target kBosHandler = {
+    "BosService::OnMessage", 0x3101B36,
+    {0x48, 0x89, 0xE0, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x60, 0x48, 0xC7, 0x40, 0xB8, 0xFE}};
+const game::Target kBosLogin = {"BosService::Login", 0x31005BA, {}};
+// Offline, the game never gets EA's online configuration, so the Keep URL stays empty; the plugin sets it with the
+// game's own String::assign(String*, const char* begin, const char* end), as the handler does when the config arrives.
+const game::Target kStringAssignRange = {"String::assign(range)", 0x2ED4C70, {}};
+using StringAssignRange_t = void(__fastcall*)(void* str, const char* begin, const char* end);
+constexpr char kKeepUrl[] = "https://prd.orbit.bos.ea.com";
+constexpr uint32_t kMsgAccountStatus = 0xEC4C1E74;
+constexpr int32_t kAccountOffline = 22;  // sent at start-up when the EA app is offline (seen in logs; the handler ignores it)
+constexpr int32_t kAccountOnline = 24;
+bool g_accountOffline = false;           // the EA account last reported itself offline
+constexpr ULONGLONG kSignInRetryMs = 30 * 1000;
+
+using BosHandler_t = uintptr_t(__fastcall*)(void* self, void* msg);
+using BosLogin_t = void(__fastcall*)(void* service, void* msg);
+BosHandler_t o_BosHandler = nullptr;
+ULONGLONG g_nextSignIn = 0;
+
+void SignInUnsafe(void* handler, BYTE* service)
+{
+    if (At<const char*>(handler, 0x08) == At<const char*>(handler, 0x10)) {
+        reinterpret_cast<StringAssignRange_t>(game::Address(kStringAssignRange))(
+            static_cast<BYTE*>(handler) + 0x08, kKeepUrl, kKeepUrl + sizeof(kKeepUrl) - 1);
+        LOG("WorldState: the game has no Keep address (no online configuration); using %s", kKeepUrl);
+    }
+    static const char kCode[] = "thedas-chronicle-offline", kAccount[] = "offline";
+    alignas(16) static BYTE msg[0x200];
+    memset(msg, 0, sizeof(msg));
+    At<uint32_t>(msg, 0x0C) = kMsgAccountStatus;
+    At<int32_t>(msg, 0x28) = kAccountOnline;
+    At<const char*>(msg, 0x148) = kCode;
+    At<const char*>(msg, 0x150) = kCode + sizeof(kCode) - 1;
+    At<const char*>(msg, 0x158) = kCode + sizeof(kCode) - 1;
+    At<const char*>(msg, 0x170) = kAccount;
+    reinterpret_cast<BosLogin_t>(game::Address(kBosLogin))(service, msg);
+}
+
+uintptr_t __fastcall hk_BosHandler(void* self, void* msg)
+{
+    uintptr_t rc = o_BosHandler(self, msg);
+    if (At<uint32_t>(msg, 0x0C) == kMsgAccountStatus) {
+        const int32_t status = At<int32_t>(msg, 0x28);
+        if (status == kAccountOffline)
+            g_accountOffline = true;
+        else if (status == kAccountOnline)
+            g_accountOffline = false;  // the game is signing in itself
+    }
+    // Only when the EA app is offline: online, the game signs in by itself.
+    if (g_signedIn || !g_accountOffline || settings::Offline() != settings::OfflineImport::Ask)
+        return rc;
+    BYTE* service = static_cast<BYTE*>(self) - 0x20;
+    if (!At<void*>(service, 0x68) || !At<void*>(service, 0x70))
+        return rc;  // not set up yet
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_nextSignIn)
+        return rc;
+    g_nextSignIn = now + kSignInRetryMs;
+    LOG("WorldState: the EA app is offline, so the game won't sign in to the Keep; signing in to the offline Keep");
+    __try {
+        SignInUnsafe(self, service);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG("WorldState: signing in failed");
+    }
+    return rc;
+}
+
 // Sign in to the Keep: whatever the login (/auth) response held, report success with a placeholder
 // session so the game offers its own "import a world state from the Keep?" flow and the golden nug works.
 uintptr_t __fastcall hk_BosParse(void* type, void* out, int status, const char* error, uintptr_t a5, const char* body,
@@ -134,12 +214,15 @@ uintptr_t __fastcall hk_BosParse(void* type, void* out, int status, const char* 
         return rc;
     static const char kSession[] = "thedas-chronicle-offline";
     reinterpret_cast<StringAssign_t>(game::Address(kStringAssign))(out, kSession, sizeof(kSession) - 1);
+    g_signedIn = true;
     LOG("WorldState: signed in to the offline Keep");
     return 1;
 }
 
 ApplyDefaults_t o_ApplyDefaults = nullptr;
 std::atomic<bool> g_inCharacterCreation{false};
+bool g_fallbackNoted = false;  // the "not signed in, importing anyway" note was logged in this character creation
+bool g_noFileNoted = false;    // this character creation asked for the world state, but there's no world-state.json
 
 // ---- Watch: after an import, check now and then that the game still holds the imported values ----
 //
@@ -295,8 +378,19 @@ uintptr_t __fastcall hk_ApplyDefaults(void* self)
     auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     if (reinterpret_cast<uintptr_t>(_ReturnAddress()) - base == kCharacterCreationOpensRva) {
         StopWatching("character creation opened");
-        if (!g_inCharacterCreation.exchange(true))
-            LOG("WorldState: character creation opened; world-state.json will be offered");
+        g_fallbackNoted = false;
+        g_noFileNoted = false;
+        hooks::vault::TakeReadBuilt();  // forget reads from before character creation (e.g. a loaded save)
+        if (!g_inCharacterCreation.exchange(true)) {
+            if (g_signedIn)
+                LOG("WorldState: character creation opened; world-state.json will be offered");
+            else
+                LOG("WorldState: character creation opened, but the game hasn't signed in to the Keep (it does once your "
+                    "EA account is online), so it won't ask about importing. %s",
+                    settings::Offline() == settings::OfflineImport::Never
+                        ? "The default world state is used ([Offline] Import=never)"
+                        : "world-state.json is imported anyway");
+        }
     }
     return o_ApplyDefaults(self);
 }
@@ -327,16 +421,53 @@ uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
     //  - a read (the player chose to import): answered with world-state.json, but only during character creation.
     //    Anything else (e.g. the request made when a save loads) is also reported as "retry later".
     //  - no request at all: when the player declines the import, the game posts the reply itself without asking
-    //    the Keep. That's left alone, so the game uses its default world state.
+    //    the Keep. That's left alone, so the game uses its default world state. But a game that isn't signed in to
+    //    the Keep never asks, and posts failed replies itself; then world-state.json is imported anyway.
     if (hooks::vault::LastWasUpload() || !g_inCharacterCreation) {
         At<int32_t>(msg, 0x28) = 1;
         uintptr_t rc = o_OnMessage(self, msg);
         At<int32_t>(msg, 0x28) = result;
         return rc;
     }
-    if (!keep::TakeWorldStateServed()) {
-        LOG("WorldState: no world state was requested (import declined); the game's default world state is used");
+    const bool failed = result != 0 || At<BYTE>(msg, 0x2C) != 0;
+    const bool readBuilt = hooks::vault::TakeReadBuilt();  // the game built a world-state read: the player said yes
+    switch (keep::TakeWorldStateRequest()) {
+    case keep::WorldStateRequest::Served:
+        break;
+    case keep::WorldStateRequest::NoFile:
+        if (!g_noFileNoted) {
+            g_noFileNoted = true;
+            LOG("WorldState: no world-state.json to import; the game's default world state is used");
+        }
         return o_OnMessage(self, msg);
+    case keep::WorldStateRequest::None:
+        // After the offline Keep found no file, the game retries, then gives up and posts a last failed reply
+        // itself: that's still "no file", not a declined import.
+        if (g_noFileNoted && failed)
+            return o_OnMessage(self, msg);
+        if (readBuilt && failed) {
+            // Offline the game's requests don't reach the network (nor the offline Keep), so the read fails.
+            LOG("WorldState: the world state request didn't reach the offline Keep (EA app offline?); importing "
+                "world-state.json");
+            break;
+        }
+        if (g_signedIn || !failed) {
+            LOG("WorldState: the import was declined; the game's default world state is used");
+            return o_OnMessage(self, msg);
+        }
+        // Not signed in, so the game couldn't ask ([Offline] Import=always, or =ask when signing in didn't work).
+        if (settings::Offline() == settings::OfflineImport::Never) {
+            if (!g_fallbackNoted) {
+                g_fallbackNoted = true;
+                LOG("WorldState: not signed in to the Keep; the game's default world state is used ([Offline] Import=never)");
+            }
+            return o_OnMessage(self, msg);
+        }
+        if (!g_fallbackNoted) {
+            g_fallbackNoted = true;
+            LOG("WorldState: not signed in to the Keep, so the game couldn't ask; importing world-state.json anyway");
+        }
+        break;
     }
 
     std::optional<worldstate::File> file = worldstate::Load();
@@ -386,6 +517,11 @@ uintptr_t __fastcall hk_OnMessage(void* self, void* msg)
 
 namespace hooks::worldstate {
 
+bool SignedIn()
+{
+    return g_signedIn;
+}
+
 bool Install()
 {
     if (!game::WaitForCode(kOnMessage, 10 * 60 * 1000)) {
@@ -395,6 +531,7 @@ bool Install()
     LOG("Installing world state hooks:");
     bool ok = game::Hook(kMapFind, reinterpret_cast<LPVOID>(&hk_MapFind), reinterpret_cast<LPVOID*>(&o_MapFind));
     ok &= game::Hook(kBosParse, reinterpret_cast<LPVOID>(&hk_BosParse), reinterpret_cast<LPVOID*>(&o_BosParse));
+    game::Hook(kBosHandler, reinterpret_cast<LPVOID>(&hk_BosHandler), reinterpret_cast<LPVOID*>(&o_BosHandler));
     ok &= game::Hook(kApplyDefaults, reinterpret_cast<LPVOID>(&hk_ApplyDefaults), reinterpret_cast<LPVOID*>(&o_ApplyDefaults));
     // The message hook goes last: it relies on the others being in place.
     ok &= hooks::vault::Install();

@@ -17,7 +17,11 @@ struct Reply {
 // Each request is logged by method and path only.
 Reply Answer(const std::string& method, const std::string& path, const std::string& body);
 
-// True once after the world state was served to the game (the player chose to import), then false until the next.
-bool TakeWorldStateServed();
+// What happened to the game's last world-state request, reported once and then reset to None:
+//   Served   the player chose to import and world-state.json was sent
+//   NoFile   the player chose to import but there's no readable world-state.json
+//   None     no request reached the offline Keep (the import was declined, or the game isn't signed in to the Keep)
+enum class WorldStateRequest { None, Served, NoFile };
+WorldStateRequest TakeWorldStateRequest();
 
 } // namespace keep

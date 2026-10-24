@@ -15,4 +15,12 @@ const std::wstring& PluginDir();
 // original Keep. Mode=all (the default): it unlocks everything.
 bool NugEarnedOnly();
 
+// [Offline] Import: what happens when the game isn't signed in to the Keep (the EA app is offline), so it can't ask
+// whether to import a world state.
+//   Ask     the plugin signs the game in to the offline Keep itself, so it asks as normal (and the golden nug works)
+//   Always  world-state.json is imported without asking
+//   Never   the game's default world state is used
+enum class OfflineImport { Ask, Always, Never };
+OfflineImport Offline();
+
 } // namespace settings

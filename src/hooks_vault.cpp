@@ -25,10 +25,12 @@ Build_t o_ReadBuild = nullptr;
 Build_t o_WriteBuild = nullptr;
 
 std::atomic<bool> g_lastWasUpload{false};
+std::atomic<bool> g_readBuilt{false};
 
 uintptr_t __fastcall hk_ReadBuild(void* req, int* method, void* url, uintptr_t a4, void* body)
 {
     g_lastWasUpload = false;
+    g_readBuilt = true;
     return o_ReadBuild(req, method, url, a4, body);
 }
 
@@ -45,6 +47,11 @@ namespace hooks::vault {
 bool LastWasUpload()
 {
     return g_lastWasUpload;
+}
+
+bool TakeReadBuilt()
+{
+    return g_readBuilt.exchange(false);
 }
 
 bool Install()

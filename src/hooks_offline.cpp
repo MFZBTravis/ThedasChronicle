@@ -9,6 +9,7 @@
 #include <MinHook.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -236,12 +237,92 @@ void __fastcall hk_SslDestroy(void* ssl)
     o_SslDestroy(ssl);
 }
 
+// ---- Keeping the Keep's HTTP client running when the EA app is offline ----
+//
+// Every Keep request ends up as a job on an HTTP client (vtable 0x1FFF3B0: +0x20 Get, +0x28 Post, +0x30 Post with
+// a body object). The client runs its jobs in Update(client, float dt), but when the EA app is offline nothing calls
+// Update for it, so the jobs never start. The online manager's own Update(manager, float dt) still runs every frame
+// on the same thread; if the client that last took a job hasn't been updated for a second, the plugin updates it
+// from there.
+const game::Target kClientGet = {"HttpClient::Get", 0x3C58C4F,
+    {0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE}};
+const game::Target kClientPost = {"HttpClient::Post", 0x3C5A992,
+    {0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE}};
+const game::Target kClientPost2 = {"HttpClient::Post2", 0x3C5A880,
+    {0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE}};
+const game::Target kClientUpdate = {"HttpClient::Update", 0x3C5C964,
+    {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0x59, 0x08, 0x48, 0x8D}};
+const game::Target kManagerUpdate = {"OnlineManager::Update", 0x310D5B7,
+    {0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCB, 0x48, 0x81, 0xC1, 0x78, 0x02, 0x00, 0x00, 0x0F}};
+constexpr ULONGLONG kClientIdleMs = 1000;
+
+using AddJob_t = uintptr_t(__fastcall*)(void* client, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5);
+using Update_t = void(__fastcall*)(void* self, float dt);
+AddJob_t o_ClientGet = nullptr;
+AddJob_t o_ClientPost = nullptr;
+AddJob_t o_ClientPost2 = nullptr;
+Update_t o_ClientUpdate = nullptr;
+Update_t o_ManagerUpdate = nullptr;
+std::atomic<void*> g_keepClient{nullptr};
+std::atomic<ULONGLONG> g_keepClientUpdated{0};
+bool g_drivingNoted = false;
+
+// A client the plugin hasn't seen yet gets a second's grace: the game may simply not have updated it yet.
+void NoteClient(void* client)
+{
+    if (g_keepClient.exchange(client) != client)
+        g_keepClientUpdated = GetTickCount64();
+}
+
+uintptr_t __fastcall hk_ClientGet(void* client, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5)
+{
+    NoteClient(client);
+    return o_ClientGet(client, a2, a3, a4, a5);
+}
+
+uintptr_t __fastcall hk_ClientPost(void* client, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5)
+{
+    NoteClient(client);
+    return o_ClientPost(client, a2, a3, a4, a5);
+}
+
+uintptr_t __fastcall hk_ClientPost2(void* client, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5)
+{
+    NoteClient(client);
+    return o_ClientPost2(client, a2, a3, a4, a5);
+}
+
+void __fastcall hk_ClientUpdate(void* client, float dt)
+{
+    if (client == g_keepClient)
+        g_keepClientUpdated = GetTickCount64();
+    o_ClientUpdate(client, dt);
+}
+
+void __fastcall hk_ManagerUpdate(void* manager, float dt)
+{
+    o_ManagerUpdate(manager, dt);
+    void* client = g_keepClient;
+    if (!client || GetTickCount64() - g_keepClientUpdated < kClientIdleMs)
+        return;
+    if (!g_drivingNoted) {
+        g_drivingNoted = true;
+        LOG("Offline Keep: the game isn't running its Keep requests (EA app offline?); running them from the plugin");
+    }
+    o_ClientUpdate(client, dt);  // the original, so this doesn't count as the game updating it
+}
+
 } // namespace
 
 namespace hooks::offline {
 
 bool InstallGameHooks()
 {
+    game::Hook(kClientGet, reinterpret_cast<LPVOID>(&hk_ClientGet), reinterpret_cast<LPVOID*>(&o_ClientGet));
+    game::Hook(kClientPost, reinterpret_cast<LPVOID>(&hk_ClientPost), reinterpret_cast<LPVOID*>(&o_ClientPost));
+    game::Hook(kClientPost2, reinterpret_cast<LPVOID>(&hk_ClientPost2), reinterpret_cast<LPVOID*>(&o_ClientPost2));
+    game::Hook(kClientUpdate, reinterpret_cast<LPVOID>(&hk_ClientUpdate), reinterpret_cast<LPVOID*>(&o_ClientUpdate));
+    game::Hook(kManagerUpdate, reinterpret_cast<LPVOID>(&hk_ManagerUpdate), reinterpret_cast<LPVOID*>(&o_ManagerUpdate));
     bool ok = game::Hook(kSslConnect, reinterpret_cast<LPVOID>(&hk_SslConnect), reinterpret_cast<LPVOID*>(&o_SslConnect));
     ok &= game::Hook(kSslStat, reinterpret_cast<LPVOID>(&hk_SslStat), reinterpret_cast<LPVOID*>(&o_SslStat));
     ok &= game::Hook(kSslSend, reinterpret_cast<LPVOID>(&hk_SslSend), reinterpret_cast<LPVOID*>(&o_SslSend));

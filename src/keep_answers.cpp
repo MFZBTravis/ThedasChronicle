@@ -16,7 +16,7 @@ namespace keep {
 
 namespace {
 
-std::atomic<bool> g_served{false};
+std::atomic<WorldStateRequest> g_request{WorldStateRequest::None};
 
 // The world-state reply as the game's parser reads it: "flags" is an object of flag name -> integer (required),
 // "name" and "lastUpdate" are strings, "history" an array of {"name", "hash"}.
@@ -115,9 +115,11 @@ Reply Answer(const std::string& method, const std::string& path, const std::stri
     } else if (route.find("/wv/") != std::string::npos && method == "GET") {
         if (std::optional<std::string> ws = FileWorldState()) {
             r.body = std::move(*ws);
-            g_served = true;
-        } else
+            g_request = WorldStateRequest::Served;
+        } else {
             r = {404, R"({"error":"not found"})"};
+            g_request = WorldStateRequest::NoFile;
+        }
     } else if (route.find("/wv/") != std::string::npos) {
         r.body = WorldStateJson("DAI", "", nlohmann::json::object());
     } else {
@@ -127,9 +129,9 @@ Reply Answer(const std::string& method, const std::string& path, const std::stri
     return r;
 }
 
-bool TakeWorldStateServed()
+WorldStateRequest TakeWorldStateRequest()
 {
-    return g_served.exchange(false);
+    return g_request.exchange(WorldStateRequest::None);
 }
 
 } // namespace keep

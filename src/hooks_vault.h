@@ -9,4 +9,7 @@ bool Install();
 // True if the most recent GameVault request the game built was an upload (PUT) rather than a read.
 bool LastWasUpload();
 
+// True once after the game built a GameVault read (the player chose to import), then false until the next.
+bool TakeReadBuilt();
+
 } // namespace hooks::vault

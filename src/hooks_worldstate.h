@@ -14,4 +14,7 @@ namespace hooks::worldstate {
 // doesn't match the expected code.
 bool Install();
 
+// True once the game is signed in to the (offline) Keep.
+bool SignedIn();
+
 } // namespace hooks::worldstate
