@@ -27,6 +27,14 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
 
 Everything else in the game is untouched.
 
+## Claim your free Keep rewards now
+
+The Dragon Age Keep website still hands out Inquisition's Keep rewards (items, mounts and the Deluxe and Inquisitor
+Edition content) to your EA account. They're EA account entitlements, so the plugin can't provide them; once claimed
+they stay on your account and the game picks them up through the EA app, even if the website closes. While
+[dragonagekeep.com](https://dragonagekeep.com/en_US/career/#product/dai) is still up, sign in, open **Career** for
+Dragon Age: Inquisition and request each unlock.
+
 ## Requirements
 
 - Dragon Age: Inquisition for PC: the Steam or EA app version (game executable build `0x5600F278`). Other builds are
