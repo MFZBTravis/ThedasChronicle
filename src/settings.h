@@ -23,4 +23,8 @@ bool NugEarnedOnly();
 enum class OfflineImport { Ask, Always, Never };
 OfflineImport Offline();
 
+// [Promo] Unlock=yes: the Keep's rewards that can't be claimed any more (The Last Court's Serault missions, the
+// promotional rings, amulet and mounts) are always available. Off by default.
+bool PromoUnlock();
+
 } // namespace settings

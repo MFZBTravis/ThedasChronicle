@@ -11,6 +11,7 @@ namespace {
 std::wstring g_dir;
 bool g_nugEarned = false;
 OfflineImport g_offline = OfflineImport::Ask;
+bool g_promoUnlock = false;
 
 const char kHeader[] = "; Thedas Chronicle plugin settings. Restart the game after changing them.\r\n";
 
@@ -32,6 +33,17 @@ const char kOfflineSection[] =
     "; always = import world-state.json without asking.\r\n"
     "; never  = use the game's default world state.\r\n"
     "Import=ask\r\n";
+
+const char kPromoSection[] =
+    "\r\n"
+    "[Promo]\r\n"
+    "; Rewards from the Dragon Age Keep and old promotions that can't be claimed any more: The Last Court's Serault\r\n"
+    "; war table missions, the Amulet of Martial Determination, Ring of Technical Logic and Premier Ring of Insight,\r\n"
+    "; the Light-Torn Steed and Primal-Trained Longma mount missions, the Legacy Ferelden and Legacy Kirkwall\r\n"
+    "; thrones, and Dragon Decor and Dragon Drapes for Skyhold. Paid content is never affected.\r\n"
+    "; yes = always available, whether or not your EA account has them.\r\n"
+    "; no  = only if your EA account has them.\r\n"
+    "Unlock=no\r\n";
 
 void Append(const std::wstring& path, const char* text, size_t length)
 {
@@ -61,6 +73,8 @@ void Load(HMODULE self)
         Append(ini, kNugSection, sizeof(kNugSection) - 1);
     if (!exists || !GetPrivateProfileSectionW(L"Offline", probe, 8, ini.c_str()))
         Append(ini, kOfflineSection, sizeof(kOfflineSection) - 1);
+    if (!exists || !GetPrivateProfileSectionW(L"Promo", probe, 8, ini.c_str()))
+        Append(ini, kPromoSection, sizeof(kPromoSection) - 1);
 
     wchar_t mode[32] = {};
     GetPrivateProfileStringW(L"GoldenNug", L"Mode", L"all", mode, 32, ini.c_str());
@@ -70,11 +84,15 @@ void Load(HMODULE self)
     g_offline = _wcsicmp(offline, L"always") == 0  ? OfflineImport::Always
                 : _wcsicmp(offline, L"never") == 0 ? OfflineImport::Never
                                                    : OfflineImport::Ask;
-    LOG("Settings: golden nug unlocks %s; when the EA app is offline, %s",
+    wchar_t promo[16] = {};
+    GetPrivateProfileStringW(L"Promo", L"Unlock", L"no", promo, 16, ini.c_str());
+    g_promoUnlock = _wcsicmp(promo, L"yes") == 0;
+    LOG("Settings: golden nug unlocks %s; when the EA app is offline, %s; Keep and promo rewards %s",
         g_nugEarned ? "what you've earned (Mode=earned)" : "everything (Mode=all)",
         g_offline == OfflineImport::Always  ? "world-state.json is imported without asking (Import=always)"
         : g_offline == OfflineImport::Never ? "the default world state is used (Import=never)"
-                                            : "the plugin signs in to the Keep so the game asks (Import=ask)");
+                                            : "the plugin signs in to the Keep so the game asks (Import=ask)",
+        g_promoUnlock ? "always available (Unlock=yes)" : "only if your EA account has them (Unlock=no)");
 }
 
 const std::wstring& PluginDir()
@@ -90,6 +108,11 @@ bool NugEarnedOnly()
 OfflineImport Offline()
 {
     return g_offline;
+}
+
+bool PromoUnlock()
+{
+    return g_promoUnlock;
 }
 
 } // namespace settings

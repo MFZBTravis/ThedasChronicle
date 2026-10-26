@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include <atomic>
+
 #include <cstdint>
 
 namespace {
@@ -135,6 +137,40 @@ uintptr_t __fastcall hk_NugSync(void* self, void* msg)
     return rc;
 }
 
+// ---- Keep rewards ----
+// Extra content is gated by install group (the SP_SLKEY_8xx keys): bool IsInstallGroupAvailable(int group).
+// Paid content (Deluxe 802, Flames 803-805, the story DLC 812-814, Black Emporium 830, Spoils 831/833) ships as
+// packages and is left to the game and the EA app. Groups 801 and 806-810 have no package: their content is in the
+// base game and the game only asks the EA account about them. They're the Keep rewards (The Last Court's Serault
+// missions, the pre-order and partner promotions' rings, amulet, weapons and mounts, the legacy thrones and the
+// dragon Skyhold decorations), which aren't sold anywhere and can't be claimed any more, so with [Promo] Unlock=yes
+// they're always available. (Identified from Haven's SpecialItemsLogic and in-game tests.)
+const game::Target kInstallGroupAvailable = {
+    "IsInstallGroupAvailable", 0x346E16B,
+    {0x53, 0x48, 0x83, 0xEC, 0x20, 0x8D, 0x81, 0xDF, 0xFC, 0xFF, 0xFF, 0x89, 0xCB, 0x83, 0xF8, 0x1F}};
+using InstallGroupAvailable_t = bool(__fastcall*)(int group);
+InstallGroupAvailable_t o_InstallGroupAvailable = nullptr;
+// 801 The Last Court (Investigate Serault), 806 Prima guide, 807 Red Lyrium Reapers pre-order, 808 Microsoft,
+// 809 AMD, 810 Logitech promotions (items in the special deliveries box; the mount missions come with these),
+// 825 the Legacy Ferelden and Legacy Kirkwall thrones (for owning Origins and Dragon Age II),
+// 832 Dragon Decor and Dragon Drapes (Skyhold customisation).
+constexpr int kKeepRewardGroups[] = {801, 806, 807, 808, 809, 810, 825, 832};
+std::atomic<bool> g_rewardsNoted{false};
+
+bool __fastcall hk_InstallGroupAvailable(int group)
+{
+    if (!settings::PromoUnlock())
+        return o_InstallGroupAvailable(group);
+    for (int g : kKeepRewardGroups) {
+        if (g == group) {
+            if (!g_rewardsNoted.exchange(true))
+                LOG("Keep rewards: The Last Court's Serault missions and the Keep's item and mount rewards are available");
+            return true;
+        }
+    }
+    return o_InstallGroupAvailable(group);
+}
+
 } // namespace
 
 namespace hooks::nug {
@@ -146,6 +182,8 @@ bool Install()
     bool ok = game::Hook(kJsonGetBool, reinterpret_cast<LPVOID>(&hk_JsonGetBool), reinterpret_cast<LPVOID*>(&o_JsonGetBool));
     ok = ok && game::Hook(kNugOnMessage, reinterpret_cast<LPVOID>(&hk_NugOnMessage), reinterpret_cast<LPVOID*>(&o_NugOnMessage));
     game::Hook(kNugSync, reinterpret_cast<LPVOID>(&hk_NugSync), reinterpret_cast<LPVOID*>(&o_NugSync));
+    game::Hook(kInstallGroupAvailable, reinterpret_cast<LPVOID>(&hk_InstallGroupAvailable),
+               reinterpret_cast<LPVOID*>(&o_InstallGroupAvailable));
     return ok;
 }
 

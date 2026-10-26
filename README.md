@@ -21,6 +21,9 @@ This repository holds the game plugin, `ThedasChronicleHook.asi`.
 - **An offline Keep.** The game never contacts EA's Keep or telemetry servers. The plugin answers every one of those
   requests itself, instantly (login, world state, golden nug, achievements, telemetry), so nothing waits on EA and
   nothing retries. Multiplayer servers are left alone.
+- **Keep rewards** (optional). The Last Court's Serault war table missions, the old pre-order and partner promotion
+  items, the legacy thrones and the dragon Skyhold decorations can be made always available, since they can't be
+  claimed any more (see Settings). Off by default.
 - **EA app offline.** With the EA app in offline mode the game normally never signs in to the Keep, so it doesn't ask
   about importing a world state and the golden nug says you're not connected. By default the plugin signs the game in
   to its offline Keep and keeps its Keep requests running, so both work offline too (see Settings).
@@ -69,6 +72,9 @@ Mode=all
 
 [Offline]
 Import=ask
+
+[Promo]
+Unlock=no
 ```
 
 - `all` (the default): the golden nug unlocks everything.
@@ -85,6 +91,17 @@ Import=ask
 - `never`: the game's default world state is used. The golden nug doesn't work while offline.
 
 With the EA app online, this setting changes nothing: the game signs in by itself and asks as usual.
+
+`[Promo] Unlock` covers rewards that can't be claimed any more and were never sold on their own: The Last Court's
+"Investigate Serault" war table missions, and the old pre-order and partner promotions (Red Lyrium Reapers weapons,
+the Prima, AMD, Logitech and Microsoft items, and the mount missions that come with them), plus the Legacy Ferelden and
+Legacy Kirkwall thrones and the Dragon Decor and Dragon Drapes for Skyhold.
+
+- `no` (the default): you get them only if your EA account has them.
+- `yes`: they're always available. Items arrive in the special deliveries box; missions appear on the war table.
+
+Paid content (the Deluxe Edition items, Flames of the Inquisition, the story DLC, the Black Emporium and the Spoils
+packs) is never affected: that's always down to your EA account.
 
 ## The log
 
